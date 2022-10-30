@@ -31,7 +31,7 @@ The reactive object returned by `useStore()` is just like any other object, but 
 An example showing how `useStore` is used in the Counter example to keep track of the count.
 
 ```tsx
-const App = component$(() => {
+export const App = component$(() => {
   const state = useStore({ count: 0 });
 
   return (
@@ -50,7 +50,7 @@ Just accessing the `state.count` property will cause the component to be updated
 
 ### Recursive values
 
-By default, `useStore()` only tracks the top level fields in your store, which means any for any updates to register, you have to update values at the top level field.
+By default, `useStore()` only tracks the top level fields in your store, which means that for any updates to register, you have to update values at the top level field.
 
 For example, this will not work:
 
@@ -61,7 +61,7 @@ export const App = component$(() => {
   const store = useStore({
     nested: { fields: { are: "not tracked" }}
   })
-  
+
   return (
     <>
       <p>{store.nested.fields.are}</p>
@@ -83,8 +83,8 @@ In order to make the first example work, we can pass a second argument to our us
 export const App = component$(() => {
   const store = useStore({
     nested: { fields: { are: "not tracked" }}
-  }, { recursion: true })
-  
+  }, { recursive: true })
+
   return (
     <>
       <p>{store.nested.fields.are}</p>
@@ -103,7 +103,7 @@ export const App = component$(() => {
   const store = useStore({
     letters: ["A", "B", "C"]
   }, { recursive: true })
-  
+
   return (
     <>
       {store.letters.map(letter => <p>{letter}</p>)}
@@ -156,7 +156,7 @@ Check the [context API](../context/index.mdx) for more information.
 ```tsx
 const CTX = createContext('stuff');
 
-const Stores = component$(() => {
+export const Stores = component$(() => {
   const userData = useStore({
     count: 0,
   });
@@ -193,15 +193,16 @@ The main difference between the two is that `useWatch$()` allows side effects an
 
 
 ### `useWatch$()` example
+
 ```tsx
-const App = component$(() => {
+export const App = component$(() => {
   const state = useStore({
     count: 0,
     doubleCount: 0
   });
 
   useWatch$(({ track }) => {
-    track(state, 'count');
+    track(() => state.count);
     state.doubleCount = state.count * 2;
   });
 
@@ -218,13 +219,13 @@ const App = component$(() => {
 ### `useResource$()` example
 
 ```tsx
-const App = component$(() => {
+export const App = component$(() => {
   const state = useStore({
     count: 0,
   });
 
   const doubleCount = useResource$(({ track }) => {
-    track(state, 'count');
+    track(() => state.count);
     return state.count * 2;
   });
 

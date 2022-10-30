@@ -7,7 +7,7 @@ export const App = component$(() => {
   });
   useWatch$(({ track }) => {
     // rerun this function  when `value` property changes.
-    track(store, 'value');
+    track(() => store.value);
     // Set up timeout for debounced value.
     const id = setTimeout(() => (store.debouncedValue = store.value), 500);
     // return cleanup function in case `value` property changes before time is up.
@@ -22,7 +22,7 @@ export const App = component$(() => {
       <br />
       Current value: {store.value}
       <br />
-      Debaunced value: {store.debouncedValue}
+      Debounced value: {store.debouncedValue}
     </>
   );
 });

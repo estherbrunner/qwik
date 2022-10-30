@@ -1,4 +1,4 @@
-import { assertEqual, assertTrue } from '../../assert/assert';
+import { assertEqual, assertTrue } from '../../error/assert';
 import { isComment, isElement, isQwikElement, isVirtualElement } from '../../util/element';
 import { qSerialize, seal } from '../../util/qdev';
 import { directGetAttribute } from '../fast-calls';
@@ -15,6 +15,7 @@ export interface VirtualElement {
   readonly insertBeforeTo: (newParent: QwikElement, child: Node | null) => void;
   readonly appendTo: (newParent: QwikElement) => void;
   readonly ownerDocument: Document;
+  readonly namespaceURI: string;
   readonly nodeType: 111;
   readonly childNodes: Node[];
   readonly firstChild: Node | null;
@@ -180,6 +181,10 @@ export class VirtualElementImpl implements VirtualElement {
 
   appendTo(newParent: QwikElement) {
     this.insertBeforeTo(newParent, null);
+  }
+
+  get namespaceURI() {
+    return this.parentElement?.namespaceURI ?? '';
   }
 
   removeChild(child: Node) {

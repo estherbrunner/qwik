@@ -1,8 +1,8 @@
 /* eslint-disable no-console */
 import type { CreateAppOptions, CreateAppResult, IntegrationData } from '../qwik/src/cli/types';
-import fs from 'fs';
+import fs from 'node:fs';
 import color from 'kleur';
-import { isAbsolute, join, relative, resolve } from 'path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import {
   cleanPackageJson,
   getPackageManager,
@@ -41,7 +41,6 @@ export async function runCreateCli(starterId: string, outDir: string) {
 
 export function logCreateAppResult(result: CreateAppResult, ranInstall: boolean) {
   console.log(``);
-  console.clear();
   console.log(``);
 
   const isCwdDir = process.cwd() === result.outDir;
@@ -69,7 +68,16 @@ export function logCreateAppResult(result: CreateAppResult, ranInstall: boolean)
   console.log(`   ${pkgManager} start`);
   console.log(``);
 
-  logSuccessFooter();
+  const qwikAdd = pkgManager === 'yarn' ? 'yarn qwik add' : `${pkgManager} run qwik add`;
+  console.log(`🔌 ${color.cyan('Integrations? Add Netlify, Cloudflare, Tailwind...')}`);
+  console.log(`   ${qwikAdd}`);
+  console.log(``);
+
+  logSuccessFooter(result.docs);
+
+  console.log(`📺 ${color.cyan('Presentations, Podcasts and Videos:')}`);
+  console.log(`   https://qwik.builder.io/media/`);
+  console.log(``);
 }
 
 export async function createApp(opts: CreateAppOptions) {
@@ -89,6 +97,7 @@ export async function createApp(opts: CreateAppOptions) {
   const result: CreateAppResult = {
     starterId: opts.starterId,
     outDir: opts.outDir,
+    docs: [],
   };
 
   const starterApps = (await loadIntegrations()).filter((i) => i.type === 'app');
@@ -106,7 +115,11 @@ export async function createApp(opts: CreateAppOptions) {
     }
     const starterApp = starterApps.find((s) => s.id === opts.starterId);
     if (!starterApp) {
-      throw new Error(`Invalid starter id "${opts.starterId}"`);
+      throw new Error(
+        `Invalid starter id "${opts.starterId}". It can only be one of${starterApps.map(
+          (app) => ` "${app.id}"`
+        )}.`
+      );
     }
 
     await createFromStarter(result, baseApp, starterApp);
@@ -119,6 +132,7 @@ async function createFromStarter(
   baseApp: IntegrationData,
   starterApp?: IntegrationData
 ) {
+  result.docs.push(...baseApp.docs);
   const appInfo = starterApp ?? baseApp;
   const appPkgJson = cleanPackageJson({
     ...baseApp.pkgJson,
@@ -141,6 +155,7 @@ async function createFromStarter(
   await baseUpdate.commit(false);
 
   if (starterApp) {
+    result.docs.push(...starterApp.docs);
     const starterUpdate = await updateApp({
       rootDir: result.outDir,
       integration: starterApp.id,

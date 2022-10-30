@@ -1,4 +1,4 @@
-import type { StreamWriter } from '@builder.io/qwik';
+import type { RenderOptions, StreamWriter } from '@builder.io/qwik';
 import type { QwikManifest } from '@builder.io/qwik/optimizer';
 import type {
   PrefetchResource,
@@ -9,13 +9,13 @@ import type {
 import type { ClientPageData, QwikCityEnvData } from '../../runtime/src/library/types';
 import { getErrorHtml } from './error-handler';
 import { HttpStatus } from './http-status-codes';
-import type { QwikCityRequestContext, QwikCityRequestOptions, UserResponseContext } from './types';
+import type { QwikCityRequestContext, UserResponseContext } from './types';
 
 export function pageHandler<T = any>(
   requestCtx: QwikCityRequestContext,
   userResponse: UserResponseContext,
   render: Render,
-  opts?: QwikCityRequestOptions,
+  opts?: RenderOptions,
   routeBundleNames?: string[]
 ): Promise<T> {
   const { status, headers } = userResponse;
@@ -71,6 +71,7 @@ async function getClientPageData(
 ) {
   const prefetchBundleNames = getPrefetchBundleNames(result, routeBundleNames);
 
+  const isStatic = !result.snapshotResult?.resources.some((r) => r._cache !== Infinity);
   const clientPage: ClientPageData = {
     body: userResponse.pendingBody ? await userResponse.pendingBody : userResponse.resolvedBody,
     status: userResponse.status !== 200 ? userResponse.status : undefined,
@@ -79,6 +80,7 @@ async function getClientPageData(
         userResponse.status <= 308 &&
         userResponse.headers.get('location')) ||
       undefined,
+    isStatic,
     prefetch: prefetchBundleNames.length > 0 ? prefetchBundleNames : undefined,
   };
 

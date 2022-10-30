@@ -1,9 +1,12 @@
 /* eslint-disable no-console */
 import color from 'kleur';
 import type { AppCommand } from '../utils/app-command';
-import { execa, ExecaReturnValue } from 'execa';
+import { execa } from 'execa';
 import { pmRunCmd } from '../utils/utils';
-
+interface Step {
+  title: string;
+  stdout?: string;
+}
 export async function runBuildCommand(app: AppCommand) {
   const pkgJsonScripts = app.packageJson.scripts;
   if (!pkgJsonScripts) {
@@ -18,7 +21,8 @@ export async function runBuildCommand(app: AppCommand) {
   const buildServerScript = !isPreviewBuild ? pkgJsonScripts['build.server'] : undefined;
   const buildStaticScript = pkgJsonScripts['build.static'];
   const runSsgScript = pkgJsonScripts['ssg'];
-  const buildTypes = !isPreviewBuild ? pkgJsonScripts['build.types'] : undefined;
+  const buildTypes = pkgJsonScripts['build.types'];
+  const lint = pkgJsonScripts['lint'];
 
   const scripts = [
     buildTypes,
@@ -27,6 +31,7 @@ export async function runBuildCommand(app: AppCommand) {
     buildPreviewScript,
     buildServerScript,
     buildStaticScript,
+    lint,
   ].filter((s) => typeof s === 'string' && s.trim().length > 0)!;
 
   if (!isLibraryBuild && !buildClientScript) {
@@ -46,7 +51,7 @@ export async function runBuildCommand(app: AppCommand) {
   }
   console.log(``);
 
-  let typecheck: Promise<ExecaReturnValue<string>> | null = null;
+  let typecheck: Promise<Step> | null = null;
 
   if (buildTypes && buildTypes.startsWith('tsc')) {
     const tscScript = parseScript(buildTypes);
@@ -56,7 +61,11 @@ export async function runBuildCommand(app: AppCommand) {
     }
     typecheck = execa(tscScript.cmd, tscScript.flags, {
       cwd: app.rootDir,
-    }).catch((e) => {
+    })
+    .then(() => ({
+      title: 'Type checked',
+    }))
+    .catch((e) => {
       let out = e.stdout;
       if (out.startsWith('tsc')) {
         out = out.slice(3);
@@ -79,7 +88,7 @@ export async function runBuildCommand(app: AppCommand) {
     console.log(`${color.cyan('✓')} Built client modules`);
   }
 
-  const step2: Promise<ExecaReturnValue<string>>[] = [];
+  const step2: Promise<Step>[] = [];
 
   if (buildLibScript) {
     const libScript = parseScript(buildLibScript);
@@ -88,7 +97,12 @@ export async function runBuildCommand(app: AppCommand) {
       env: {
         FORCE_COLOR: 'true',
       },
-    }).catch((e) => {
+    })
+    .then(e => ({
+      title: 'Built library modules',
+      stdout: e.stdout
+    }))
+    .catch((e) => {
       console.log(``);
       if (e.stderr) {
         console.log(e.stderr);
@@ -108,7 +122,12 @@ export async function runBuildCommand(app: AppCommand) {
       env: {
         FORCE_COLOR: 'true',
       },
-    }).catch((e) => {
+    })
+    .then(e => ({
+      title: 'Built preview (ssr) modules',
+      stdout: e.stdout
+    }))
+    .catch((e) => {
       console.log(``);
       if (e.stderr) {
         console.log(e.stderr);
@@ -128,7 +147,12 @@ export async function runBuildCommand(app: AppCommand) {
       env: {
         FORCE_COLOR: 'true',
       },
-    }).catch((e) => {
+    })
+    .then(e => ({
+      title: 'Built server (ssr) modules',
+      stdout: e.stdout
+    }))
+    .catch((e) => {
       console.log(``);
       if (e.stderr) {
         console.log(e.stderr);
@@ -148,7 +172,12 @@ export async function runBuildCommand(app: AppCommand) {
       env: {
         FORCE_COLOR: 'true',
       },
-    }).catch((e) => {
+    })
+    .then(e => ({
+      title: 'Built static (ssg) modules',
+      stdout: e.stdout
+    }))
+    .catch((e) => {
       console.log(``);
       if (e.stderr) {
         console.log(e.stderr);
@@ -165,23 +194,39 @@ export async function runBuildCommand(app: AppCommand) {
     step2.push(typecheck);
   }
 
+  if (lint) {
+    const lintScript = parseScript(lint);
+    const lintBuild = execa(lintScript.cmd, lintScript.flags, {
+      cwd: app.rootDir,
+      env: {
+        FORCE_COLOR: 'true',
+      },
+    })
+    .then(() => ({
+      title: 'Lint checked',
+    }))
+    .catch((e) => {
+      console.log(``);
+      if (e.stderr) {
+        console.log(e.stderr);
+      } else {
+        console.log(e.stdout);
+      }
+      console.log(``);
+      process.exit(1);
+    });
+    step2.push(lintBuild);
+  }
+
   if (step2.length > 0) {
-    await Promise.all(step2).then(() => {
-      if (buildLibScript) {
-        console.log(`${color.cyan('✓')} Built library modules`);
-      }
-      if (buildPreviewScript) {
-        console.log(`${color.cyan('✓')} Built preview (ssr) modules`);
-      }
-      if (buildServerScript) {
-        console.log(`${color.cyan('✓')} Built server (ssr) modules`);
-      }
-      if (buildStaticScript) {
-        console.log(`${color.cyan('✓')} Built static (ssg) modules`);
-      }
-      if (typecheck) {
-        console.log(`${color.cyan('✓')} Type checked`);
-      }
+    await Promise.all(step2).then((steps) => {
+      steps.forEach(step => {
+        if (step.stdout) {
+          console.log('');
+          console.log(step.stdout);
+        }
+        console.log(`${color.cyan('✓')} ${step.title}`);
+      });
 
       if (!isPreviewBuild && !buildServerScript && !buildStaticScript && !isLibraryBuild) {
         const pmRun = pmRunCmd()

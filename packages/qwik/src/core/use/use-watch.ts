@@ -1,20 +1,12 @@
-import {
-  getProxyManager,
-  isSignal,
-  noSerialize,
-  NoSerialize,
-  unwrapProxy,
-} from '../object/q-object';
-import { getContext } from '../props/props';
 import { newInvokeContext, invoke, waitAndRun } from './use-core';
 import { logError, logErrorAndStop } from '../util/log';
 import { delay, safeCall, then } from '../util/promises';
 import { isFunction, isObject, ValueOrPromise } from '../util/types';
 import { isServer } from '../platform/platform';
 import { implicit$FirstArg } from '../util/implicit_dollar';
-import { assertDefined, assertEqual } from '../assert/assert';
-import type { QRL } from '../import/qrl.public';
-import { assertQrl, createQRL, QRLInternal } from '../import/qrl-class';
+import { assertDefined, assertEqual } from '../error/assert';
+import type { QRL } from '../qrl/qrl.public';
+import { assertQrl, createQRL, QRLInternal } from '../qrl/qrl-class';
 import {
   codeToText,
   qError,
@@ -22,13 +14,15 @@ import {
   QError_trackUseStore,
 } from '../error/error';
 import { useOn, useOnDocument } from './use-on';
-import { intToStr, MustGetObjID, strToInt } from '../object/store';
-import type { ContainerState } from '../render/container';
+import { ContainerState, intToStr, MustGetObjID, strToInt } from '../container/container';
 import { notifyWatch, _hW } from '../render/dom/notify-render';
 import { useSequentialScope } from './use-sequential-scope';
 import type { QwikElement } from '../render/dom/virtual-element';
 import { handleError } from '../render/error-handling';
 import type { RenderContext } from '../render/types';
+import { getProxyManager, noSerialize, NoSerialize, unwrapProxy } from '../state/common';
+import { getContext } from '../state/context';
+import { isSignal } from '../state/signal';
 
 export const WatchFlagsIsEffect = 1 << 0;
 export const WatchFlagsIsWatch = 1 << 1;
@@ -116,6 +110,7 @@ export interface WatchCtx {
 export interface ResourceCtx<T> {
   track: Tracker;
   cleanup(callback: () => void): void;
+  cache(policyOrMilliseconds: number | 'immutable'): void;
   previous: T | undefined;
 }
 
@@ -143,41 +138,37 @@ export type ResourceReturn<T> = ResourcePending<T> | ResourceResolved<T> | Resou
  * @public
  */
 export interface ResourcePending<T> {
-  __brand: 'resource';
-  state: 'pending';
-
   promise: Promise<T>;
-  resolved: undefined;
-  error: undefined;
-  timeout?: number;
+  loading: boolean;
 }
 
 /**
  * @public
  */
 export interface ResourceResolved<T> {
-  __brand: 'resource';
-  state: 'resolved';
-
   promise: Promise<T>;
-  resolved: T;
-  error: undefined;
-  timeout?: number;
+  loading: boolean;
 }
 
 /**
  * @public
  */
 export interface ResourceRejected<T> {
-  __brand: 'resource';
-  state: 'rejected';
-
   promise: Promise<T>;
-  resolved: undefined;
-  error: any;
-  timeout?: number;
+  loading: boolean;
 }
 
+export interface ResourceReturnInternal<T> {
+  __brand: 'resource';
+  _state: 'pending' | 'resolved' | 'rejected';
+  _resolved: T | undefined;
+  _error: any;
+  _cache: number;
+  _timeout: number;
+
+  promise: Promise<T>;
+  loading: boolean;
+}
 /**
  * @alpha
  */
@@ -394,21 +385,24 @@ export const useWatch$ = /*#__PURE__*/ implicit$FirstArg(useWatchQrl);
  */
 // </docs>
 export const useClientEffectQrl = (qrl: QRL<WatchFn>, opts?: UseEffectOptions): void => {
-  const { get, set, i, ctx } = useSequentialScope<boolean>();
+  const { get, set, i, ctx } = useSequentialScope<Watch>();
+  const eagerness = opts?.eagerness ?? 'visible';
   if (get) {
+    if (isServer()) {
+      useRunWatch(get, eagerness);
+    }
     return;
   }
   assertQrl(qrl);
   const el = ctx.$hostElement$;
   const watch = new Watch(WatchFlagsIsEffect, i, el, qrl, undefined);
-  const eagerness = opts?.eagerness ?? 'visible';
   const elCtx = getContext(el);
   const containerState = ctx.$renderCtx$.$static$.$containerState$;
-  set(true);
   if (!elCtx.$watches$) {
     elCtx.$watches$ = [];
   }
   elCtx.$watches$.push(watch);
+  set(watch);
   useRunWatch(watch, eagerness);
   if (!isServer()) {
     qrl.$resolveLazy$(containerState.$containerEl$);
@@ -624,7 +618,8 @@ export const useMount$ = /*#__PURE__*/ implicit$FirstArg(useMountQrl);
 
 export type WatchDescriptor = DescriptorBase<WatchFn>;
 
-export interface ResourceDescriptor<T> extends DescriptorBase<ResourceFn<T>, ResourceReturn<T>> {}
+export interface ResourceDescriptor<T>
+  extends DescriptorBase<ResourceFn<T>, ResourceReturnInternal<T>> {}
 
 export type SubscriberHost = QwikElement;
 
@@ -697,7 +692,16 @@ export const runResource = <T>(
     cleanup(callback) {
       cleanups.push(callback);
     },
-    previous: resourceTarget.resolved,
+    cache(policy) {
+      let milliseconds = 0;
+      if (policy === 'immutable') {
+        milliseconds = Infinity;
+      } else {
+        milliseconds = policy;
+      }
+      resource._cache = milliseconds;
+    },
+    previous: resourceTarget._resolved,
   };
 
   let resolve: (v: T) => void;
@@ -709,15 +713,18 @@ export const runResource = <T>(
       done = true;
       if (resolved) {
         done = true;
-        resource.state = 'resolved';
-        resource.resolved = value;
-        resource.error = undefined;
+        resource.loading = false;
+        resource._state = 'resolved';
+        resource._resolved = value;
+        resource._error = undefined;
+
         resolve(value);
       } else {
         done = true;
-        resource.state = 'rejected';
-        resource.resolved = undefined;
-        resource.error = value;
+        resource.loading = false;
+        resource._state = 'rejected';
+        resource._resolved = undefined;
+        resource._error = value;
         reject(value);
       }
       return true;
@@ -727,8 +734,9 @@ export const runResource = <T>(
 
   // Execute mutation inside empty invokation
   invoke(invokationContext, () => {
-    resource.state = 'pending';
-    resource.resolved = undefined as any;
+    resource._state = 'pending';
+    resource.loading = !isServer();
+    resource._resolved = undefined as any;
     resource.promise = new Promise((r, re) => {
       resolve = r;
       reject = re;
@@ -749,12 +757,12 @@ export const runResource = <T>(
     }
   );
 
-  const timeout = resourceTarget.timeout;
-  if (timeout) {
+  const timeout = resourceTarget._timeout;
+  if (timeout > 0) {
     return Promise.race([
       promise,
       delay(timeout).then(() => {
-        if (setState(false, 'timeout')) {
+        if (setState(false, new Error('timeout'))) {
           cleanupWatch(watch);
         }
       }),
@@ -894,8 +902,6 @@ export class Watch implements DescriptorBase<any, any> {
     public $index$: number,
     public $el$: QwikElement,
     public $qrl$: QRLInternal<any>,
-    public $resource$: ResourceReturn<any> | undefined
+    public $resource$: ResourceReturnInternal<any> | undefined
   ) {}
 }
-
-export type ResourceReturnInternal<T = any> = ResourceReturn<T> & { dirty: boolean };
