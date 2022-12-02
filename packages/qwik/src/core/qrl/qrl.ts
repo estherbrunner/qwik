@@ -113,6 +113,16 @@ export const inlinedQrl = <T>(
 /**
  * @internal
  */
+export const _noopQrl = <T>(
+  symbolName: string,
+  lexicalScopeCapture: any[] = EMPTY_ARRAY
+): QRL<T> => {
+  return createQRL<T>(null, symbolName, null, null, null, lexicalScopeCapture, null);
+};
+
+/**
+ * @internal
+ */
 export const qrlDEV = <T = any>(
   chunkOrFn: string | (() => Promise<any>),
   symbol: string,
@@ -167,7 +177,7 @@ export const serializeQRL = (qrl: QRLInternal, opts: QRLSerializeOptions = {}) =
     symbol = '_';
   }
   if (!chunk) {
-    throw qError(QError_qrlMissingChunk, qrl);
+    throw qError(QError_qrlMissingChunk, qrl.$symbol$);
   }
   if (chunk.startsWith('./')) {
     chunk = chunk.slice(2);
@@ -211,7 +221,6 @@ export const parseQRL = (qrl: string, containerEl?: Element): QRLInternal => {
 
   const symbolStartIdx = hashIdx == endIdx ? hashIdx : hashIdx + 1;
   const symbolEndIdx = captureIdx;
-  // TODO
   const symbol =
     symbolStartIdx == symbolEndIdx ? 'default' : qrl.substring(symbolStartIdx, symbolEndIdx);
 

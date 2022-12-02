@@ -79,6 +79,27 @@ renderSuite('should serialize boolean attributes correctly', async () => {
   await render(fixture.host, <input required={true} disabled={false}></input>);
   await expectRendered(fixture, '<input required="" />');
 });
+
+renderSuite('should render aria', async () => {
+  const fixture = new ElementFixture();
+  await render(
+    fixture.host,
+    <div
+      id="abc"
+      title="bar"
+      aria-required={true}
+      aria-busy={false}
+      role=""
+      preventdefault:click
+      aria-hidden={undefined}
+    ></div>
+  );
+  await expectRendered(
+    fixture,
+    '<div id="abc" title="bar" aria-required="true" aria-busy="false" role="" preventdefault:click=""></div>'
+  );
+});
+
 renderSuite('should render into a document', async () => {
   const fixture = new ElementFixture();
   fixture.document.head.appendChild(fixture.document.createElement('existing'));
@@ -140,6 +161,20 @@ renderSuite('should render style only for defined attributes', async () => {
   );
 });
 
+renderSuite('should render style css variables correctly', async () => {
+  const fixture = new ElementFixture();
+  await render(
+    fixture.host,
+    <div
+      style={{
+        '--stuff-hey': 'hey',
+        '--stuffCase': 'foo',
+      }}
+    />
+  );
+  await expectRendered(fixture, `<div style="--stuff-hey: hey; --stuffCase: foo"></div>`);
+});
+
 renderSuite('should render children', async () => {
   const fixture = new ElementFixture();
   await render(
@@ -177,7 +212,7 @@ renderSuite('should render a component with scoped styles', async () => {
     fixture.host,
     `
   <host q:version="dev" q:container="resumed" q:render="dom-dev">
-    <style q:style="ml52vk-0">
+    <style q:style="ml52vk-0" hidden="">
       .stuff.⭐️ml52vk-0 {
         color: red;
       }
@@ -200,7 +235,7 @@ renderSuite('should render a component with scoped styles', async () => {
     fixture.host,
     `
   <host q:version="dev" q:container="resumed" q:render="dom-dev">
-    <style q:style="ml52vk-0">
+    <style q:style="ml52vk-0" hidden="">
       .stuff.⭐️ml52vk-0 {
         color: red;
       }

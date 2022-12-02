@@ -11,7 +11,7 @@ import type { ValueOrPromise } from '../../util/types';
 import { isPromise, promiseAll, promiseAllLazy, then } from '../../util/promises';
 import { assertDefined, assertEqual, assertTrue } from '../../error/assert';
 import { logWarn } from '../../util/log';
-import { qDev, qSerialize } from '../../util/qdev';
+import { qDev, qInspector, qSerialize, qTest } from '../../util/qdev';
 import type { OnRenderFn } from '../../component/component.public';
 import { directGetAttribute, directSetAttribute } from '../fast-calls';
 import { SKIP_RENDER_TYPE } from '../jsx/jsx-runtime';
@@ -27,6 +27,7 @@ import {
 import { getVdom, ProcessedJSXNode, ProcessedJSXNodeImpl, renderComponent } from './render-dom';
 import type { RenderContext, RenderStaticContext } from '../types';
 import {
+  isAriaAttribute,
   parseClassList,
   pushRenderContext,
   serializeClass,
@@ -64,6 +65,7 @@ import { EMPTY_OBJ } from '../../util/flyweight';
 import { addSignalSub, isSignal } from '../../state/signal';
 import {
   cleanupContext,
+  createContext,
   getContext,
   HOST_FLAG_DIRTY,
   HOST_FLAG_NEED_ATTACH_LISTENER,
@@ -71,13 +73,8 @@ import {
   tryGetContext,
 } from '../../state/context';
 import { getProxyManager, getProxyTarget, SubscriptionManager } from '../../state/common';
-import { createProxy } from '../../state/store';
-import {
-  QObjectFlagsSymbol,
-  QObjectImmutable,
-  _IMMUTABLE,
-  _IMMUTABLE_PREFIX,
-} from '../../state/constants';
+import { createPropsState, createProxy } from '../../state/store';
+import { _IMMUTABLE, _IMMUTABLE_PREFIX } from '../../state/constants';
 
 export const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -420,7 +417,7 @@ export const patchVnode = (
 
   const props = newVnode.$props$;
   const isComponent = isVirtual && OnRenderProp in props;
-  const elCtx = getContext(elm);
+  const elCtx = getContext(elm, rCtx.$static$.$containerState$);
   assertDefined(currentComponent, 'slots can not be rendered outside a component', elm);
   if (!isComponent) {
     const pendingListeners = currentComponent.li;
@@ -497,7 +494,6 @@ const renderContentProjection = (
   const newChildren = vnode.$children$;
   const staticCtx = rCtx.$static$;
   const splittedNewChidren = splitChildren(newChildren);
-  const slotRctx = pushRenderContext(rCtx, hostCtx);
   const slotMaps = getSlotMap(hostCtx);
 
   // Remove content from empty slots
@@ -531,8 +527,10 @@ const renderContentProjection = (
     Object.keys(splittedNewChidren).map((key) => {
       const newVdom = splittedNewChidren[key];
       const slotElm = getSlotElement(staticCtx, slotMaps, hostCtx.$element$, key);
-      const slotCtx = getContext(slotElm);
+      const slotCtx = getContext(slotElm, rCtx.$static$.$containerState$);
       const oldVdom = getVdom(slotCtx);
+      const slotRctx = pushRenderContext(rCtx);
+      slotRctx.$slotCtx$ = slotCtx;
       slotCtx.$vdom$ = newVdom;
       newVdom.$elm$ = slotElm;
       return smartUpdateChildren(slotRctx, oldVdom, newVdom, 'root', flags);
@@ -637,13 +635,25 @@ const createElm = (
     elm = createElement(doc, tag, isSvg);
     flags &= ~IS_HEAD;
   }
+  if (qDev && qInspector) {
+    const dev = vnode.$dev$;
+    if (dev) {
+      directSetAttribute(
+        elm,
+        'data-qwik-inspector',
+        `${encodeURIComponent(dev.fileName)}:${dev.lineNumber}:${dev.columnNumber}`
+      );
+    }
+  }
 
   vnode.$elm$ = elm;
   if (isSvg && tag === 'foreignObject') {
     isSvg = false;
     flags &= ~IS_SVG;
   }
-  const elCtx = getContext(elm);
+  const elCtx = createContext(elm);
+  elCtx.$parent$ = rCtx.$cmpCtx$;
+  elCtx.$slotParent$ = rCtx.$slotCtx$;
   if (isComponent) {
     setKey(elm, vnode.$key$);
     assertTrue(isVirtual, 'component must be a virtual element');
@@ -651,6 +661,13 @@ const createElm = (
     assertQrl<OnRenderFn<any>>(renderQRL);
     setComponentProps(elCtx, rCtx, props.props);
     setQId(rCtx, elCtx);
+
+    if (qDev && !qTest) {
+      const symbol = renderQRL.$symbol$;
+      if (symbol) {
+        directSetAttribute(elm, 'data-qrl', symbol);
+      }
+    }
 
     // Run mount hook
     elCtx.$componentQrl$ = renderQRL;
@@ -663,15 +680,16 @@ const createElm = (
       if (children.length === 1 && children[0].$type$ === SKIP_RENDER_TYPE) {
         children = children[0].$children$;
       }
-      const slotRctx = pushRenderContext(rCtx, elCtx);
       const slotMap = getSlotMap(elCtx);
       const p: Promise<void>[] = [];
       for (const node of children) {
+        const slotEl = getSlotElement(staticCtx, slotMap, elm, getSlotName(node));
+        const slotRctx = pushRenderContext(rCtx);
+        slotRctx.$slotCtx$ = getContext(slotEl, staticCtx.$containerState$);
         const nodeElm = createElm(slotRctx, node, flags, p);
         assertDefined(node.$elm$, 'vnode elm must be defined');
         assertEqual(nodeElm, node.$elm$, 'vnode elm must be defined');
-
-        appendChild(staticCtx, getSlotElement(staticCtx, slotMap, elm, getSlotName(node)), nodeElm);
+        appendChild(staticCtx, slotEl, nodeElm);
       }
 
       return promiseAllLazy(p);
@@ -866,7 +884,7 @@ export const updateProperties = (
   }
   const immutableMeta = (newProps as any)[_IMMUTABLE] ?? EMPTY_OBJ;
   const elm = elCtx.$element$;
-  for (let prop of keys) {
+  for (const prop of keys) {
     if (prop === 'ref') {
       assertElement(elm);
       setRef(newProps[prop], elm);
@@ -879,15 +897,12 @@ export const updateProperties = (
       continue;
     }
 
-    if (prop === 'className') {
-      prop = 'class';
-    }
     if (isSignal(newValue)) {
       addSignalSub(1, hostElm, newValue, elm, prop);
       newValue = newValue.value;
     }
     if (prop === 'class') {
-      newProps['class'] = newValue = serializeClass(newValue);
+      newValue = serializeClass(newValue);
     }
     const normalizedProp = isSvg ? prop : prop.toLowerCase();
     const oldValue = oldProps[normalizedProp];
@@ -909,6 +924,12 @@ export const smartSetProperty = (
   oldValue: any,
   isSvg: boolean
 ) => {
+  // aria attribute value should be rendered as string
+  if (isAriaAttribute(prop)) {
+    setAttribute(staticCtx, elm, prop, newValue != null ? String(newValue) : newValue);
+    return;
+  }
+
   // Check if its an exception
   const exception = PROP_HANDLER_MAP[prop];
   if (exception) {
@@ -979,7 +1000,7 @@ export const setProperties = (
     return values;
   }
   const immutableMeta = (newProps as any)[_IMMUTABLE] ?? EMPTY_OBJ;
-  for (let prop of keys) {
+  for (const prop of keys) {
     if (prop === 'children') {
       continue;
     }
@@ -995,17 +1016,17 @@ export const setProperties = (
       continue;
     }
 
-    if (prop === 'className') {
-      prop = 'class';
-    }
-    if (hostElm && isSignal(newValue)) {
-      addSignalSub(1, hostElm, newValue, elm, prop);
+    const sig = isSignal(newValue);
+    if (sig) {
+      if (hostElm) addSignalSub(1, hostElm, newValue, elm, prop);
       newValue = newValue.value;
     }
-    if (prop === 'class') {
-      newValue = serializeClass(newValue);
-    }
     const normalizedProp = isSvg ? prop : prop.toLowerCase();
+    if (normalizedProp === 'class') {
+      if (qDev && values.class) throw new TypeError('Can only provide one of class or className');
+      // Signals shouldn't be changed
+      if (!sig) newValue = serializeClass(newValue);
+    }
     values[normalizedProp] = newValue;
     smartSetProperty(staticCtx, elm, prop, newValue, undefined, isSvg);
   }
@@ -1020,12 +1041,7 @@ export const setComponentProps = (
   const keys = Object.keys(expectProps);
   let props = elCtx.$props$;
   if (!props) {
-    elCtx.$props$ = props = createProxy(
-      {
-        [QObjectFlagsSymbol]: QObjectImmutable,
-      },
-      rCtx.$static$.$containerState$
-    );
+    elCtx.$props$ = props = createProxy(createPropsState(), rCtx.$static$.$containerState$);
   }
   if (keys.length === 0) {
     return false;

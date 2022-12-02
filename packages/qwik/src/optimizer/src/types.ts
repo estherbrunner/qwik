@@ -80,6 +80,9 @@ export interface TransformOptions {
   explicitExtensions?: boolean;
   mode?: EmitMode;
   scope?: string;
+  stripExports?: string[];
+  stripCtxName?: string[];
+  stripCtxKind?: 'function' | 'event';
 }
 
 /**
@@ -303,7 +306,6 @@ export interface GlobalInjections {
   tag: string;
   attributes?: { [key: string]: string };
   location: 'head' | 'body';
-  children?: string;
 }
 
 export interface GeneratedOutputBundle {
